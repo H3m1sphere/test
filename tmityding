@@ -1,0 +1,19 @@
+import numpy as np
+import pandas as pd
+import os
+
+csv_files = [f for f in os.listdir('import') if f.endswith('.csv')]
+readed_csv_list = [pd.read_csv('import/' + f, header=None) for f in csv_files]
+
+readed_csv = readed_csv_list[0]
+readed_csv_split_by_blank_lines = [group.dropna(how='all') for _, group in readed_csv.groupby(readed_csv.isnull().all(axis=1).cumsum())]
+data_list = [df for df in readed_csv_split_by_blank_lines if not df.empty and df.iloc[0, 0] == "WAFER ID"]
+
+data = data_list[0]
+Wafer_ID = data.iloc[0, 1]
+Lot_ID = data.iloc[1, 1]
+start_index = data[data[0] == "Site#"].index[0]
+end_index = data[data[0] == "taildummy1"].index[0] - 1
+data2 = data.loc[start_index:end_index]
+data2.columns = data2.iloc[0]
+data2 = data2[1:]
