@@ -1,19 +1,62 @@
-import numpy as np
 import pandas as pd
-import os
+from pathlib import Path
+import csv
 
-csv_files = [f for f in os.listdir('import') if f.endswith('.csv')]
-readed_csv_list = [pd.read_csv('import/' + f, header=None) for f in csv_files]
+# inputフォルダ内のCSVファイルをpd.DataFrameに格納.先頭行にファイル名を追加
+data_list = []
+for f in Path('./input/').glob('*.csv'):
+    filename_without_ext = f.stem
+    with f.open('r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        data = list(reader)
+        data.insert(0, ["file_name", filename_without_ext])
+        df = pd.DataFrame(data)
+        data_list.append(df)
 
-readed_csv = readed_csv_list[0]
-readed_csv_split_by_blank_lines = [group.dropna(how='all') for _, group in readed_csv.groupby(readed_csv.isnull().all(axis=1).cumsum())]
-data_list = [df for df in readed_csv_split_by_blank_lines if not df.empty and df.iloc[0, 0] == "WAFER ID"]
+# CSVを空白行で分割
+data_by_block_list_list = []
+for data in data_list:
+    is_blank = data.applymap(lambda x: x is None or str(x).strip() == '').all(axis=1)
+    split_indices = is_blank[is_blank].index
+    split_indices = [-1] + list(split_indices) + [len(data)]
+    blocks = [data.iloc[split_indices[i]+1:split_indices[i+1]].dropna(how='all').reset_index(drop=True) for i in range(len(split_indices)-1)]
+    blocks = [block for block in blocks if not block.empty]
+    data_by_block_list_list.append(blocks)
 
-data = data_list[0]
-Wafer_ID = data.iloc[0, 1]
-Lot_ID = data.iloc[1, 1]
-start_index = data[data[0] == "Site#"].index[0]
-end_index = data[data[0] == "taildummy1"].index[0] - 1
-data2 = data.loc[start_index:end_index]
-data2.columns = data2.iloc[0]
-data2 = data2[1:]
+# ブロックを必要なデータのみの表形式に変換
+tidying_data_list = []
+for data_by_block_list in data_by_block_list_list:
+    for block in data_by_block_list[1:]:
+        # header_dataを作成．生値以外の必要なデータをまとめておく
+        header_data = pd.concat([
+            data_by_block_list[0][data_by_block_list[0][0].isin(["file_name", "date", "moded"])],
+            block[block[0].isin(["WAFER ID", "LOT ID"])]
+        ]).iloc[:, :2].T
+        header_data.columns = header_data.iloc[0]
+        header_data = header_data[1:]
+
+        # column_namesを作成．
+        column_names = [name for name in block[block[0] == "RESULT"].iloc[0].dropna().apply(str.strip).tolist()[1:] if name != '']
+        column_names.extend(["X", "Y"])
+
+        # 生値データを作成．
+        site_index = block[block[0] == "Site#"].index[0]
+        max_index = block.iloc[site_index+1:][0].apply(str.isnumeric).idxmin()
+        raw_data = block.iloc[site_index+1:max_index, 1:]
+        raw_data.columns = column_names
+        raw_data = raw_data.T
+        raw_data.reset_index(inplace=True)
+        raw_data.columns = ["Site" + str(i+1) for i in range(raw_data.shape[1])]
+        raw_data.columns.values[0] = "TYPE"
+        
+        # raw_dataにheader_dataを追加
+        header_data_repeated = pd.concat([header_data]*len(raw_data), ignore_index=True)
+        raw_data = pd.concat([header_data_repeated, raw_data.reset_index(drop=True)], axis=1)
+        tidying_data_list.append(raw_data)
+
+# tidying_data_listをマージして一つのデータフレームにする
+merged_data = pd.concat(tidying_data_list, join='outer', ignore_index=True)
+
+# merged_dataを出力
+merged_data.to_csv('./output/TMI_data_summry_table.csv', index=False)
+print("Done!")
